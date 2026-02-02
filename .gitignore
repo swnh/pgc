@@ -1,0 +1,63 @@
+# Build directories
+build/
+bin/
+lib/
+*.o
+*.a
+*.so
+*.dylib
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Compiled binaries
+*.exe
+*.out
+tmc3
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.ipynb_checkpoints/
+
+# Datasets (large files - excluded from repository)
+datasets/
+
+# Compressed files
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+
+# Log files
+*.log
+
+# Experiment outputs (keep configs, exclude results)
+experiments/*/output/
+experiments/*/results/
+experiments/*/*.csv
+experiments/*/*.json
+experiments/*/*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
