@@ -1299,67 +1299,64 @@ generateGeomPredictionTreeAngular(
 {
   int32_t pointCount = std::distance(begin, end);
   int32_t numLasers = gps.numLasers();
-  int32_t numGroups = 1; // (numLasers + 7) >> 3;
 
   std::vector<GNode> nodes(pointCount); // Prediction tree
 
-  // Candidate List (fixed-size) - matching 03_group8 strategy
-  // 4 groups, each with up to 16 candidates
-  std::array<std::array<int32_t, 64>, 1> prevNodes;
-  std::array<uint8_t, 1> prevNodeCount;  // Track number of candidates per group
-  std::array<int32_t, 1> firstNodes;
-
-  // Initialize candidate list
-  for (int group = 0; group < numGroups; group++) {
-    prevNodeCount[group] = 0;
-    firstNodes[group] = -1;
-    for (int slot = 0; slot < 64; slot++) {
-      prevNodes[group][slot] = -1;
-    }
-  }
+  std::vector<int32_t> prevNodes(numLasers, -1);   // One entry per laser
+  std::vector<int32_t> firstNodes(numLasers, -1);  // One entry per laser
 
   for (int nodeIdx = 0, nodeIdxN; nodeIdx < pointCount; nodeIdx = nodeIdxN) {
     auto curPoint = begin[nodeIdx];
+
     auto& node = nodes[nodeIdx];
     node.childrenCount = 0;
 
-    // Duplicate Search
     node.numDups = 0;
     for (nodeIdxN = nodeIdx + 1; nodeIdxN < pointCount; nodeIdxN++) {
       if (curPoint != begin[nodeIdxN])
         break;
       node.numDups++;
     }
-
     const auto carPos = curPoint - origin;
-    int thetaIdx = indexLaserAngle[nodeIdx];
-    int groupIdx = 0; // thetaIdx >> 3;
-    // Bounds check: ensure groupIdx is within valid array range (0-3)
-    if (groupIdx < 0 || groupIdx >= numGroups) {
-      groupIdx = std::min(std::max(0, groupIdx), numGroups - 1);
-    }
-    /*
+    int thetaIdx = 0;
+    
     if (indexLaserAngle) {
       thetaIdx = indexLaserAngle[nodeIdx];
       if (thetaIdx < 0 || thetaIdx >= numLasers) {
-        std::cerr << "Error: Invalid laser angle index" << std::endl;
-        continue;
+      std::cerr << "WARNING: thetIdx " << thetaIdx << "out of range [0, " << numLasers << ")" << std::endl; 
       }
-      groupIdx = thetaIdx >> 3;
     }
-    */
-    beginSph[nodeIdx] = carPos;
 
-    for (int i = nodeIdx + 1; i < nodeIdxN; i++)
+    beginSph[nodeIdx] = carPos;
+    for (int i = nodeIdx + 1; i < nodeIdxN; i++) {
       beginSph[i] = carPos;
+    }
 
     int32_t bestParent = -1;
     int64_t minDist = std::numeric_limits<int64_t>::max();
 
-    // Search for the closest parent in the candidate list (matching 03_group8)
-    for (int slot = 0; slot < prevNodeCount[groupIdx]; slot++) {
-      int32_t candidateIdx = prevNodes[groupIdx][slot];
-      if (candidateIdx >= 0) {
+    const int windowSize = 8;
+    int halfWindow = windowSize >> 1;  // windowSize / 2 = 4
+    int startLaser, endLaser;
+    
+    // Always try to maintain a window of size 8
+    if (thetaIdx < halfWindow) {
+      // Near the start: extend window to the right
+      startLaser = 0;
+      endLaser = std::min(windowSize - 1, numLasers - 1);
+    } else if (thetaIdx >= numLasers - halfWindow) {
+      // Near the end: extend window to the left
+      startLaser = std::max(0, numLasers - windowSize);
+      endLaser = numLasers - 1;
+    } else {
+      // Middle: symmetric window around thetaIdx
+      startLaser = thetaIdx - halfWindow;
+      endLaser = thetaIdx + halfWindow - 1;  // -1 because window of 8 means ±3.5, so -4 to +3
+    }
+
+    for (int i = startLaser; i <= endLaser; ++i) {
+      int32_t candidateIdx = prevNodes[i];
+      if (candidateIdx >= 0) {  // Check if there's a valid candidate
         auto candidatePos = beginSph[candidateIdx];
         int32_t dx = carPos[0] - candidatePos[0];
         int32_t dy = carPos[1] - candidatePos[1];
@@ -1374,64 +1371,55 @@ generateGeomPredictionTreeAngular(
     }
 
     node.parent = bestParent;
-
+    
     if (node.parent != -1) {
       auto& pnode = nodes[bestParent];
+
       if (pnode.childrenCount < GNode::MaxChildrenCount) {
         pnode.children[pnode.childrenCount++] = nodeIdx;
 
-        int childLimit = (bestParent == firstNodes[groupIdx]) ? 2 : GNode::MaxChildrenCount;
+        auto childLimit = (bestParent == firstNodes[thetaIdx]) ? 2 : GNode::MaxChildrenCount;
         if (pnode.childrenCount >= childLimit) {
-          // Remove full parent from candidate list
-          for (int slot = 0; slot < prevNodeCount[groupIdx]; slot++) {
-            if (prevNodes[groupIdx][slot] == bestParent) {
-              // Shift remaining candidates left to fill the gap
-              for (int i = slot; i < prevNodeCount[groupIdx] - 1; i++) {
-                prevNodes[groupIdx][i] = prevNodes[groupIdx][i + 1];
-              }
-              prevNodeCount[groupIdx]--;
-              break;
-            }
-          }
+          // Parent is full, remove it from candidate list
+          prevNodes[thetaIdx] = -1;
         }
+      } else {
+        std::cerr << "WARNING: No parent found for node " << nodeIdx << std::endl;
       }
     } else {
-      firstNodes[groupIdx] = nodeIdx;
+      // This is a root node (first node for this laser)
+      firstNodes[thetaIdx] = nodeIdx;
     }
-
-    // Add current node to candidate list (matching 03_group8)
-    if (prevNodeCount[groupIdx] < 64) {
-      prevNodes[groupIdx][prevNodeCount[groupIdx]++] = nodeIdx;
-    } else {
-      // FIFO: remove oldest, add newest
-      for (int i = 0; i < 63; i++) {
-        prevNodes[groupIdx][i] = prevNodes[groupIdx][i + 1];
-      }
-      prevNodes[groupIdx][63] = nodeIdx;
-    }
-  } // end of for nodeIdx
+    
+    // ALWAYS add current node to candidate list
+    prevNodes[thetaIdx] = nodeIdx;
+  } // end of for loop
 
   int32_t n0 = 0;
-  
-  while (n0 < numGroups && firstNodes[n0] == -1)
-    n0++;
 
-  if (n0 < numGroups) {
-    for (int32_t n = n0 + 1, parentIdx = firstNodes[n0]; n < numGroups; ++n) {
+  while (n0 < numLasers && firstNodes[n0] == -1) {
+    n0++;
+  }
+
+  if (n0 < numLasers) {
+    for (int32_t n = n0 + 1, parentIdx = firstNodes[n0]; n < numLasers; ++n) {
       auto nodeIdx = firstNodes[n];
-      
+
       if (nodeIdx < 0)
         continue;
-      
+
       auto& pnode = nodes[parentIdx];
+
       if (pnode.childrenCount < GNode::MaxChildrenCount) {
         nodes[nodeIdx].parent = parentIdx;
         pnode.children[pnode.childrenCount++] = nodeIdx;
+        parentIdx = nodeIdx;
+      } else {
+        std::cerr << "WARNING: No parent found for fisrtNode " << nodeIdx << std::endl;
       }
-      
-      parentIdx = nodeIdx;
     }
   }
+
   return nodes;
 }
 

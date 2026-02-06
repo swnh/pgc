@@ -1284,7 +1284,77 @@ generateGeomPredictionTree(
 }
 
 //----------------------------------------------------------------------------
+static constexpr int32_t MAX_LASERS = 32;
+static constexpr int32_t MAX_RING_POINTS = 2048;
+static constexpr int32_t DEPTH = 3;
+std::vector<GNode> 
+generateGeomPredictionTreeAngular(  
+  // const GeometryParameterSet& gps,
+  // const Vec3<int32_t> origin,
+  const Vec3<int32_t>* begin,
+  const Vec3<int32_t>* end,
+  // Vec3<int32_t>* beginSph,
+  // bool enablePartition,
+  // int32_t splitter,
+  // bool& reversed,
+  const int* indexLaserAngle)
+{
+  int32_t pointCount = std::distance(begin, end);
+  std::vector<GNode> nodes(pointCount);
 
+
+  std::array<std::array<int32_t, MAX_RING_POINTS>, MAX_LASERS> buffer; // mapping nodeIdx and ring tempIdx
+
+  for (int laser = 0; laser < MAX_LASERS; laser++) {
+    for (int slot = 0; slot < DEPTH; slot++) {
+      buffer[laser][slot] = -1;
+    }
+  }
+  // Main Loop
+  int ringNum = 0;
+  int tempIdx = 0;
+  int nodeIdx = 0;
+
+  for (int nodeIdx = 0; nodeIdx < pointCount; nodeIdx++) {
+    // Find Laser Index
+    ringNum = indexLaserAngle[nodeIdx];
+    tempIdx = nodeIdx / MAX_LASERS;
+    
+    buffer[ringNum][tempIdx] = nodeIdx;
+  } // Filling buffer
+
+  for (ringNum = 0; ringNum < MAX_LASERS; ringNum++) {
+    int ringCount = buffer[ringNum].size();
+    
+    for (int tempIdx = 0, tempIdxN; tempIdx < ringCount; tempIdx = tempIdxN) {
+      nodeIdx = buffer[ringNum][tempIdx];
+      auto curPoint = begin[nodeIdx];
+      auto& node = nodes[nodeIdx];
+      node.childrenCount = 0;
+
+      // Duplicate search per laser
+      for (tempIdxN = tempIdx + 1; tempIdxN < ringCount; tempIdxN++) {
+        int nodeIdxN = buffer[ringNum][tempIdxN];
+        if (curPoint != begin[nodeIdxN])
+          break;
+        node.numDups++;
+      }
+    }
+  }
+
+  for (ringNum = 0; ringNum < MAX_LASERS; ringNum += 2) {
+    int ringCount = buffer[ringNum].size();
+
+    for (int tempIdx = 0; tempIdx < ringCount; tempIdx++) {
+      nodeIdx = buffer[ringNum][tempIdx];
+
+    }
+  }
+
+  
+}
+
+//----------------------------------------------------------------------------
 std::vector<GNode>
 generateGeomPredictionTreeAngular(
   const GeometryParameterSet& gps,
