@@ -1329,14 +1329,27 @@ generateGeomPredictionTreeAngular(
     // cartesian to spherical coordinates
     /* MODIFIED: Use ring number as thetaIdx if available */
     const auto carPos = curPoint - origin;
+    if (indexLaserAngle[nodeIdx] < 5) {
+      std::cerr << "1. carPos: " << carPos << "=" << curPoint << "-" << origin << std::endl;
+    }
     auto& sphPos = beginSph[nodeIdx] = cartToSpherical(carPos);
+    if (indexLaserAngle[nodeIdx] < 5) {
+      std::cerr << "2. sphPos: " << sphPos << std::endl;
+    }
     // First Modification
     // auto thetaIdx = indexLaserAngle ? indexLaserAngle[nodeIdx] : sphPos[2];
     //=========== MODIFICATION STARTS ===================
     auto thetaIdx = sphPos[2];
     if (indexLaserAngle) {
       thetaIdx = indexLaserAngle[nodeIdx];
+      if (indexLaserAngle[nodeIdx] < 5) {
+        std::cerr << "3. thetaIdx: " << thetaIdx << std::endl;
+      }
       sphPos[2] = thetaIdx; // Update the value to match the index
+      if (indexLaserAngle[nodeIdx] < 5) {
+        std::cerr << "4. sphPos[2]: " << thetaIdx << "\n" << std::endl;
+      }
+      
     }
     //=========== MODIFICATION ENDS =====================
 

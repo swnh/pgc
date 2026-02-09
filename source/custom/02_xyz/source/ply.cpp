@@ -496,6 +496,21 @@ ply::read(
             ifs.read(reinterpret_cast<char*>(&findex), sizeof(uint16_t));
             cloud.getFrameIndex(pointCounter) = uint8_t(findex);
           }
+        } else if (a == indexLaserAngle && attributeInfo.byteCount <= 4) {
+          /* MODIFIED: Read laser angle / ring number from binary PLY file */
+          if (attributeInfo.byteCount == 1) {
+            uint8_t laserAngle;
+            ifs.read(reinterpret_cast<char*>(&laserAngle), sizeof(uint8_t));
+            cloud.getLaserAngle(pointCounter) = int(laserAngle);
+          } else if (attributeInfo.byteCount == 2) {
+            uint16_t laserAngle;
+            ifs.read(reinterpret_cast<char*>(&laserAngle), sizeof(uint16_t));
+            cloud.getLaserAngle(pointCounter) = int(laserAngle);
+          } else {
+            int32_t laserAngle;
+            ifs.read(reinterpret_cast<char*>(&laserAngle), sizeof(int32_t));
+            cloud.getLaserAngle(pointCounter) = laserAngle;
+          }
         } else {
           char buffer[128];
           ifs.read(buffer, attributeInfo.byteCount);

@@ -17,4 +17,8 @@ endif()
 set(ORIGINAL_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../mpeg-pcc-tmc13/tmc3)
 set(DEPENDENCY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../mpeg-pcc-tmc13/dependencies)
 
+add_subdirectory(01_ring)
+add_subdirectory(02_xyz)
+add_subdirectory(v1)
 add_subdirectory(v2)
+add_subdirectory(v3)

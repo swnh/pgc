@@ -1179,6 +1179,8 @@ PredGeomEncoder::encode(
     if (processedNodes != numNodes)
       encodeEndOfTreesFlag(false);
   }
+
+  std::cerr << "processedNodes: " << processedNodes << "," << " numNodes: " << numNodes;
   assert(processedNodes == numNodes);
 }
 
@@ -1285,73 +1287,124 @@ generateGeomPredictionTree(
 
 //----------------------------------------------------------------------------
 static constexpr int32_t MAX_LASERS = 32;
-static constexpr int32_t MAX_RING_POINTS = 2048;
-static constexpr int32_t DEPTH = 3;
+static constexpr int32_t MAX_RING_POINTS = 2048; // 1085 +- 5 points per ring (< 2^11 = 2048)
+
 std::vector<GNode> 
 generateGeomPredictionTreeAngular(  
-  // const GeometryParameterSet& gps,
-  // const Vec3<int32_t> origin,
   const Vec3<int32_t>* begin,
   const Vec3<int32_t>* end,
-  // Vec3<int32_t>* beginSph,
-  // bool enablePartition,
-  // int32_t splitter,
-  // bool& reversed,
   const int* indexLaserAngle)
 {
   int32_t pointCount = std::distance(begin, end);
   std::vector<GNode> nodes(pointCount);
 
+  // Buffer: [Ring][TempIdx] -> nodeIdx
+  std::array<std::array<int32_t, MAX_RING_POINTS>, MAX_LASERS> buffer;
+  for (auto& ring : buffer) std::fill(ring.begin(), ring.end(), -1);
 
-  std::array<std::array<int32_t, MAX_RING_POINTS>, MAX_LASERS> buffer; // mapping nodeIdx and ring tempIdx
+  int maxUsedTempIdx = 0;
 
-  for (int laser = 0; laser < MAX_LASERS; laser++) {
-    for (int slot = 0; slot < DEPTH; slot++) {
-      buffer[laser][slot] = -1;
-    }
-  }
-  // Main Loop
-  int ringNum = 0;
-  int tempIdx = 0;
-  int nodeIdx = 0;
-
+  // 2. Fill Buffer
   for (int nodeIdx = 0; nodeIdx < pointCount; nodeIdx++) {
-    // Find Laser Index
-    ringNum = indexLaserAngle[nodeIdx];
-    tempIdx = nodeIdx / MAX_LASERS;
-    
-    buffer[ringNum][tempIdx] = nodeIdx;
-  } // Filling buffer
+      int ringNum = indexLaserAngle[nodeIdx];
+      int tempIdx = nodeIdx / MAX_LASERS; 
+      
+      if (nodeIdx < 64) {  // Debug first 64 points
+          std::cerr << "nodeIdx=" << nodeIdx 
+                    << " ringNum=" << ringNum 
+                    << " tempIdx=" << tempIdx << "\n";
+      }
+      
+      if (tempIdx < MAX_RING_POINTS) {
+        buffer[ringNum][tempIdx] = nodeIdx;
+        if (tempIdx > maxUsedTempIdx) maxUsedTempIdx = tempIdx;
+      }
+  }
 
-  for (ringNum = 0; ringNum < MAX_LASERS; ringNum++) {
-    int ringCount = buffer[ringNum].size();
-    
-    for (int tempIdx = 0, tempIdxN; tempIdx < ringCount; tempIdx = tempIdxN) {
-      nodeIdx = buffer[ringNum][tempIdx];
-      auto curPoint = begin[nodeIdx];
+  // Check what's actually in the buffer
+  std::cerr << "\nBuffer check:\n";
+  for (int r = 0; r < MAX_LASERS; r++) {
+      std::cerr << "Ring " << r << ": buffer[" << r << "][0] = " 
+                << buffer[r][0] << "\n";
+  }
+
+  std::cerr << "maxUsedTempIdx: " << maxUsedTempIdx << "\n";
+
+  int ringMaxIdx = maxUsedTempIdx + 1;
+
+  // Main Loop
+  for (int ringNum = 0; ringNum < MAX_LASERS; ringNum++) { 
+    for (int tempIdx = 0, nextT; tempIdx < ringMaxIdx; tempIdx = nextT) {
+      int nodeIdx = buffer[ringNum][tempIdx];
+      if (nodeIdx < 0) {
+        std::cerr << "[LAST INDEX] Ring: " << "Ring: " << ringNum << "tempIdx: " << tempIdx << "\n";
+        break;
+      } // empty slot
+
       auto& node = nodes[nodeIdx];
       node.childrenCount = 0;
-
-      // Duplicate search per laser
-      for (tempIdxN = tempIdx + 1; tempIdxN < ringCount; tempIdxN++) {
-        int nodeIdxN = buffer[ringNum][tempIdxN];
-        if (curPoint != begin[nodeIdxN])
-          break;
+      node.numDups = 0;
+      node.parent = -1;
+      auto curPoint = begin[nodeIdx];
+      
+      // Look ahead for duplicates
+      for (nextT = tempIdx + 1; nextT < ringMaxIdx; nextT++) {
+        int nodeIdxN = buffer[ringNum][nextT];
+        if (nodeIdxN < 0) break; 
+        if (curPoint != begin[nodeIdxN]) break; // Different point, stop.
+        
         node.numDups++;
+      }
+      
+      int32_t bestParent = -1;
+      int64_t minDist = std::numeric_limits<int64_t>::max();
+      if (ringNum % 2 == 0) {
+        // Process EVEN Rings
+        if (tempIdx >= 0) {
+          for (int rOff = -1; rOff <= 1; rOff++) {
+            int neighborRing = ringNum + rOff;
+            if (neighborRing >=0 && neighborRing < MAX_LASERS) {
+              int32_t parentIdx = buffer[neighborRing][tempIdx - 1];
+              if (parentIdx != -1 && nodes[parentIdx].childrenCount < GNode::MaxChildrenCount) {
+                auto diff = curPoint - begin[parentIdx];
+                int64_t normL1 = std::abs(diff[0]) + std::abs(diff[1]) + std::abs(diff[2]);
+                if (normL1 < minDist) {
+                  minDist = normL1;
+                  bestParent = parentIdx;
+                }
+              }
+            }
+          }
+        }
+      } else {
+        // Process ODD Rings
+        if (tempIdx >= 1) {
+          for (int rOff = -1; rOff <= 1; rOff++) {
+            int neighborRing = ringNum + rOff;
+            if (neighborRing >=0 && neighborRing < MAX_LASERS) {
+              int32_t parentIdx = buffer[neighborRing][tempIdx];
+              if (parentIdx != -1 && nodes[parentIdx].childrenCount < GNode::MaxChildrenCount) {
+                auto diff = curPoint - begin[parentIdx];
+                int64_t normL1 = std::abs(diff[0]) + std::abs(diff[1]) + std::abs(diff[2]);
+                if (normL1 < minDist) {
+                  minDist = normL1;
+                  bestParent = parentIdx;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (bestParent != -1) {
+        auto& pnode = nodes[bestParent];
+        node.parent = bestParent;
+        pnode.children[pnode.childrenCount++] = nodeIdx;
       }
     }
   }
 
-  for (ringNum = 0; ringNum < MAX_LASERS; ringNum += 2) {
-    int ringCount = buffer[ringNum].size();
-
-    for (int tempIdx = 0; tempIdx < ringCount; tempIdx++) {
-      nodeIdx = buffer[ringNum][tempIdx];
-
-    }
-  }
-
-  
+  return nodes;
 }
 
 //----------------------------------------------------------------------------
@@ -1679,8 +1732,9 @@ encodePredictiveGeometry(
     }
     // then build and encode the tree
     auto nodes = gps.geom_angular_mode_enabled_flag
-      ? generateGeomPredictionTreeAngular(
-          gps, origin, begin, end, beginSph, opt.enablePartition,splitter, reversed, indexLaserAngle) // beginSph -> beginCart
+      ? generateGeomPredictionTreeAngular(begin, end, indexLaserAngle)
+        //generateGeomPredictionTreeAngular(
+        // gps, origin, begin, end, beginSph, opt.enablePartition,splitter, reversed, indexLaserAngle) // beginSph -> beginCart
       : generateGeomPredictionTree(gps, begin, end);
 
     // Determining minimum radius for prediction.

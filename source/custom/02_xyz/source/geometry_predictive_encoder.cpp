@@ -1330,6 +1330,9 @@ generateGeomPredictionTreeAngular(
     /* MODIFIED: Use cartesian coordinate to build the tree
      * and set the thetaIdx to the ring number */
     const auto carPos = curPoint - origin;
+    if (indexLaserAngle[nodeIdx] < 5) {
+      std::cerr <<"1. " << carPos[0] << " = " << curPoint[0] << " - " << origin[0] << std::endl;
+    }
     // auto& sphPos = beginSph[nodeIdx] = cartToSpherical(carPos);
     // First Modification
     // auto thetaIdx = indexLaserAngle ? indexLaserAngle[nodeIdx] : sphPos[2];
@@ -1345,11 +1348,14 @@ generateGeomPredictionTreeAngular(
     auto thetaIdx = 0;
     if (indexLaserAngle) {
       thetaIdx = indexLaserAngle[nodeIdx];
-      if (thetaIdx < 0 || thetaIdx >= numLasers) {
-        std::cerr << "WARNING: thetaIdx " << thetaIdx << " out of range [0, " << numLasers << ")" << std::endl;
+      if (indexLaserAngle[nodeIdx] < 5) {
+        std::cerr << "2. thetaIdx: " << thetaIdx << std::endl;
       }
     }
     beginSph[nodeIdx] = carPos;
+    if (indexLaserAngle[nodeIdx] < 5) {
+      std::cerr << "3. beginSph" << "[" << nodeIdx << "]" << "=" << beginSph[nodeIdx] << "\n" << std::endl;
+    }
     // propagate converted coordinates over duplicate points
     for (int i = nodeIdx + 1; i < nodeIdxN; i++)
       beginSph[i] = carPos;
