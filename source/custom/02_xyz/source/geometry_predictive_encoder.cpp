@@ -44,6 +44,7 @@
 #include "nanoflann.hpp"
 #include <algorithm>
 #include <bitset>
+#include <array> // to use fixed-size array for hardware modeing
 
 namespace pcc {
 
@@ -1036,7 +1037,7 @@ PredGeomEncoder::encodeTree(
         }
       }
     }
-
+    
     assert(node.childrenCount <= GNode::MaxChildrenCount);
     if (!_geom_unique_points_flag)
       encodeNumDuplicatePoints(node.numDups);
@@ -1178,6 +1179,7 @@ PredGeomEncoder::encode(
     if (processedNodes != numNodes)
       encodeEndOfTreesFlag(false);
   }
+  std::cerr << "processedNodes: " << processedNodes << ", numNodes: " << numNodes << std::endl;
   assert(processedNodes == numNodes);
 }
 
@@ -1281,7 +1283,232 @@ generateGeomPredictionTree(
 
   return nodes;
 }
+//----------------------------------------------------------------------------
+std::vector<GNode>
+generateGeomPredictionTreeRing(
+  const GeometryParameterSet& gps,
+  const Vec3<int32_t>* begin,
+  const Vec3<int32_t>* end,
+  Vec3<int32_t>* beginSph,
+  const Vec3<int32_t> origin,
+  const int* indexLaserAngle)
+{
+  int32_t pointCount = std::distance(begin, end);
+  int32_t numLasers = gps.numLasers();
 
+  std::vector<GNode> nodes(pointCount);
+  std::vector<int32_t> prevNodes(numLasers, -1);
+  std::vector<int32_t> firstNodes(numLasers, -1);
+
+  for (int nodeIdx = 0; nodeIdx < pointCount; nodeIdx++) {
+    auto curPoint = begin[nodeIdx];
+    if (beginSph) {
+      beginSph[nodeIdx] = curPoint - origin;
+    }
+    uint16_t thetaIdx = indexLaserAngle[nodeIdx];
+
+    auto& node = nodes[nodeIdx];
+    node.childrenCount = 0;
+    node.numDups = 0;
+    node.parent = prevNodes[thetaIdx];
+    
+    if (node.parent != -1) {
+      auto& pnode = nodes[node.parent];
+
+      if (curPoint == begin[node.parent]) {
+        pnode.numDups++;
+        continue;
+      }
+      if (pnode.childrenCount < GNode::MaxChildrenCount) {
+        pnode.children[pnode.childrenCount++] = nodeIdx;
+      } else {
+        std::cerr << "MaxChilrenCount is violated for " << nodeIdx << std::endl;
+      }
+      prevNodes[thetaIdx] = nodeIdx;
+    } else {
+      // First point in the ring (root)
+      firstNodes[thetaIdx] = nodeIdx;
+      prevNodes[thetaIdx] = nodeIdx;
+    }
+  }
+
+  int32_t globalRootIdx = -1;
+  int32_t lastRootIdx = -1;
+
+  for (int r = 0; r < numLasers; r++) {
+    int32_t currRoot = firstNodes[r];
+    if (currRoot == -1) continue;
+
+    if (globalRootIdx == -1) {
+      globalRootIdx = currRoot;
+      lastRootIdx = currRoot;
+    } else {
+      // Attach this ring's root to the previous ring's root
+      auto& pnode = nodes[lastRootIdx];
+      auto& cnode = nodes[currRoot];
+
+      cnode.parent = lastRootIdx;
+      if (pnode.childrenCount < GNode::MaxChildrenCount) {
+        pnode.children[pnode.childrenCount++] = currRoot;
+      }
+      lastRootIdx = currRoot;
+    }
+  }
+
+  return nodes;
+}
+
+//----------------------------------------------------------------------------
+std::vector<GNode>
+generateGeomPredictionTreeAngular(
+  // const GeometryParameterSet& gps,
+  const Vec3<int32_t>* begin,
+  const Vec3<int32_t>* end,
+  Vec3<int32_t>* beginSph,
+  const Vec3<int32_t>& origin,
+  const int* indexLaserAngle)
+{
+  int32_t pointCount = std::distance(begin, end);
+  // int32_t numLasers = gps.numLasers();
+  static constexpr int32_t numLasers = 32; // 32 lasers for nuScenes (Velodyn 32E)
+  
+  // Prediction Tree to feed encode() function
+  std::vector<GNode> nodes(pointCount);
+
+  // ========================================
+  // Buffers
+  // ========================================
+  // Buffer for one scan slice (current vertical column)
+  std::array<int32_t, numLasers> laserBuffer;
+  std::array<int32_t, numLasers> prevNodes;
+  std::array<int32_t, numLasers> firstNodes;
+
+  // Initailize the buffers
+  laserBuffer.fill(-1);
+  prevNodes.fill(-1);
+  firstNodes.fill(-1);
+
+  // =======================================
+  // Process the Buffer
+  // =======================================
+  auto processBuffer = [&](void) {
+    for (int r = 0; r < numLasers; r++) {
+      int32_t currIdx = laserBuffer[r];
+
+      if (currIdx == -1) continue;
+
+      int32_t parentIdx = prevNodes[r];
+      auto& cnode = nodes[currIdx]; // current node
+
+      // Root slice
+      if (parentIdx == -1) {
+        cnode.parent = -1;
+        cnode.numDups = 0;
+        firstNodes[r] = currIdx; // mark as the start of this ring
+        prevNodes[r] = currIdx; // update history
+        continue;
+      }
+
+      // If we have a prevNodes
+      auto& pnode = nodes[parentIdx];
+      cnode.parent = parentIdx;
+      cnode.numDups = 0;
+
+      // Only add to children list if space permits
+      if (pnode.childrenCount < GNode::MaxChildrenCount) {
+        pnode.children[pnode.childrenCount++] = currIdx;
+      }
+
+      // Update history
+      prevNodes[r] = currIdx;
+      // Handle duplicates as zero residuals
+      /*
+      if (begin[currIdx] == begin[parentIdx]) {
+        // --- DUPLICATE FOUND ---
+        // Increment duplicate count on the *Parent*
+        pnode.numDups++;
+
+        // Mark current node as effectively "merged"
+        cnode.parent = parentIdx;
+        cnode.numDups = 0; // it is duplicate itself
+
+        // Do not update prevNodes[r] to currIdx
+        // Keep pointing to 'parentIdx'
+      } else {
+        // --- UNIQUE POINT ---
+        cnode.parent = parentIdx;
+        cnode.numDups = 0;
+
+        // Link in the tree structure
+        if (pnode.childrenCount < GNode::MaxChildrenCount)
+          pnode.children[pnode.childrenCount++] = currIdx;
+
+        // Update history: this node becomes the parent for the next column
+        prevNodes[r] = currIdx;
+      }
+      */
+    }
+
+    // Clear buffer for the next column
+    laserBuffer.fill(-1);
+  };
+
+  // =======================================
+  // Main Loop
+  // =======================================
+  for (int nodeIdx = 0; nodeIdx < pointCount; nodeIdx++) {
+    beginSph[nodeIdx] = begin[nodeIdx] - origin;
+    if (!indexLaserAngle) continue;
+    int ringNum = indexLaserAngle[nodeIdx];
+
+    // Safety check
+    if (ringNum < 0 || ringNum >= numLasers)
+      std::cerr << "Invalid ring number." << std::endl;
+
+    // FLUSH CONDITION:
+    // If we already have a point for this ring in the buffer,
+    // it means we have finished a column and started a new one.
+    if (laserBuffer[ringNum] != -1) {
+      processBuffer();
+    }
+
+    // Add current point to the buffer
+    laserBuffer[ringNum] = nodeIdx;
+  } // main loop
+
+  // Process the final remaining points in the buffer
+  processBuffer();
+  
+
+  // =======================================
+  // Stitch the roots
+  // =======================================
+  int32_t globalRootIdx = -1;
+  int32_t lastRootIdx = -1;
+
+  for (int r = 0; r < numLasers; r++) {
+    int32_t currRoot = firstNodes[r];
+
+    if (currRoot == -1) continue;
+
+    if (globalRootIdx == -1) {
+      globalRootIdx = currRoot;
+      lastRootIdx = currRoot;
+    } else {
+      // Attach this ring's start to the previous ring's start
+      auto& pnode = nodes[lastRootIdx];
+      auto& cnode = nodes[currRoot];
+
+      cnode.parent = lastRootIdx;
+      if (pnode.childrenCount < GNode::MaxChildrenCount)
+        pnode.children[pnode.childrenCount++] = currRoot;
+      
+      lastRootIdx = currRoot;
+    }
+  }
+
+  return nodes;
+}
 //----------------------------------------------------------------------------
 
 std::vector<GNode>
@@ -1599,8 +1826,10 @@ encodePredictiveGeometry(
     }
     // then build and encode the tree
     auto nodes = gps.geom_angular_mode_enabled_flag
-      ? generateGeomPredictionTreeAngular(
-          gps, origin, begin, end, beginSph, opt.enablePartition,splitter, reversed, indexLaserAngle) // beginSph -> beginCart
+      ? // generateGeomPredictionTreeRing(gps, begin, end, indexLaserAngle)
+        generateGeomPredictionTreeAngular(begin, end, beginSph, origin, indexLaserAngle)
+        // generateGeomPredictionTreeAngular(
+          // gps, origin, begin, end, beginSph, opt.enablePartition,splitter, reversed, indexLaserAngle) // beginSph -> beginCart
       : generateGeomPredictionTree(gps, begin, end);
 
     // Determining minimum radius for prediction.
@@ -1615,7 +1844,7 @@ encodePredictiveGeometry(
       enc.setMinRadius(gbh.pgeom_min_radius);
     }
 
-    auto* a = gps.geom_angular_mode_enabled_flag ? beginSph : begin;
+    auto* a = gps.geom_angular_mode_enabled_flag ? beginSph : begin;;
     auto* b = begin;
 
     if (i > 0)
