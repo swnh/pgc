@@ -126,7 +126,10 @@ public:
   void encodeNumChildren(int numChildren);
   void encodePredMode(GPredicter::Mode mode);
   void encodePredIdx(int predIdx);
-
+  
+  // *** ADDED FOR CONTEXT MODELING TEXT AND RESIDUAL BYPASS ***
+  void encodeResidual(const Vec3<int32_t> residual);
+  // *** END ***
   void encodeResidual(const Vec3<int32_t>& residual, int iMode, int multiplier, int rPred, int predIdx, const bool interFlag
     , int refNodeIdx
   );
@@ -831,6 +834,55 @@ PredGeomEncoder::encodeTree(
     const auto& point = srcPts[nodeIdx];
     // *** TO TRACK THE RING NUMBER ***
     const int thetaIdx = indexLaserAngle[nodeIdx];
+    // *** END ***
+
+    // *** POINT DUMP ***
+    #if 0
+    #pragma pack(push, 1)
+    struct point_in {
+      int16_t x;
+      int16_t y;
+      int16_t z;
+      uint8_t thetaIdx;
+    };
+    #pragma pack(pop)
+    
+    {
+      point_in p;
+      p.x = (int16_t)point[0];
+      p.y = (int16_t)point[1];
+      p.z = (int16_t)point[2];
+      p.thetaIdx = (uint8_t)thetaIdx;
+
+      static std::ofstream binFile;
+
+      if (!binFile.is_open()) {
+        const char* envPath = std::getenv("dump_bin_path");
+        const std::string binPath = envPath ?  envPath : "/home/swnh/pgc/experiments/csv/best_residual.bin";
+        binFile.open(binPath, std::ios::binary | std::ios::out | std::ios::trunc);
+      }
+
+      if (binFile.is_open()) {
+        binFile.write(reinterpret_cast<const char*>(&p), sizeof(p));
+      }
+      
+      static std::ofstream dumpFile;
+      if (!dumpFile.is_open()) {
+        const char* dumpPath = std::getenv("dump_point_path");
+        const std::string path = dumpPath ?  dumpPath : "/home/swnh/pgc/experiments/csv/best_residual.txt";
+        
+        dumpFile.open(path, std::ios::out | std::ios:: trunc);
+        dumpFile << "x,y,z,thetaIdx\n";
+      }
+      dumpFile
+        << (int)p.x << ","
+        << (int)p.y << ","
+        << (int)p.z << ","
+        << (int)p.thetaIdx << "\n";
+    }
+    #endif
+    
+    // *** END POINT DUMP ***
     struct {
       float bits = bits = std::numeric_limits<float>::max();
       GPredicter::Mode mode;
@@ -866,7 +918,7 @@ PredGeomEncoder::encodeTree(
     bool firstCheck = true;
 
     for (int iMode = iModeBegin; iMode < iModeEnd; iMode++) {
-// *** SET MODE 0 ONLY FOR THE ROOT ***
+      // *** SET MODE 0 ONLY FOR THE ROOT ***
       if (iMode == 0 && nodeIdx != rootIdx)
         continue;
       // *** END ***
@@ -1176,8 +1228,12 @@ PredGeomEncoder::encodeTree(
     // *** END ***
     reconPts[nodeIdx] = best.prediction + best.residual;
 
+    // *** ACCEPT THE NEGATIVE COORDINATES ***
+    #if 0
     for (int k = 0; k < 3; k++)
       reconPts[nodeIdx][k] = std::max(0, reconPts[nodeIdx][k]);
+    #endif
+    // *** END ***
 
     // NB: the coded order of duplicate points assumes that the duplicates
     // are consecutive -- in order that the correct attributes are coded.
@@ -1675,6 +1731,57 @@ encodePredictiveGeometry(
     auto* begin = &cloud[i];
     auto* beginSph = sphericalPos.data() + i;
     auto* end = &cloud[0] + iEnd;
+    
+    // *** USE RING NUMBER AS thetaIdx IF AVAILABLE ***
+    const int* indexLaserAngle = nullptr;
+    if (cloud.hasLaserAngles()) {
+      indexLaserAngle = &cloud.getLaserAngle(i); 
+    }
+
+    // *** DUMP POINT CLOUD IN PLY ORDER ***
+    #pragma pack(push, 1)
+    struct point_in {
+      int16_t x;
+      int16_t y;
+      int16_t z;
+      uint8_t thetaIdx;
+    };
+    #pragma pack(pop)
+    
+    {
+      static std::ofstream binFile;
+      if (!binFile.is_open()) {
+        const char* envPath = std::getenv("dump_bin_path");
+        const std::string binPath = envPath ? envPath : "/home/swnh/pgc/experiments/csv/best_residual.bin";
+        binFile.open(binPath, std::ios::binary | std::ios::out | std::ios::trunc);
+      }
+
+      static std::ofstream dumpFile;
+      if (!dumpFile.is_open()) {
+        const char* dumpPath = std::getenv("dump_point_path");
+        const std::string path = dumpPath ? dumpPath : "/home/swnh/pgc/experiments/csv/best_residual.txt";
+        dumpFile.open(path, std::ios::out | std::ios::trunc);
+        dumpFile << "x,y,z,thetaIdx\n";
+      }
+
+      int numChunkPts = iEnd - i;
+      for (int j = 0; j < numChunkPts; j++) {
+        point_in p;
+        p.x = (int16_t)begin[j][0];
+        p.y = (int16_t)begin[j][1];
+        p.z = (int16_t)begin[j][2];
+        p.thetaIdx = (uint8_t)(indexLaserAngle ? indexLaserAngle[j] : 0);
+
+        if (binFile.is_open())
+          binFile.write(reinterpret_cast<const char*>(&p), sizeof(p));
+
+        dumpFile
+          << p.x << ","
+          << p.y << ","
+          << p.z << ","
+          << (int)p.thetaIdx << "\n";
+      }
+    }
 
     // first, put the points in this tree into a sorted order
     // this can significantly improve the constructed tree
@@ -1686,12 +1793,6 @@ encodePredictiveGeometry(
       sortByRadius(cloud, i, iEnd, origin);
     else if (opt.sortMode == PredGeomEncOpts::kSortLaserAngle)
       sortByLaserAngle(cloud, i, iEnd, opt.azimuthSortRecipBinWidth, origin);
-    
-    // *** USE RING NUMBER AS thetaIdx IF AVAILABLE ***
-    const int* indexLaserAngle = nullptr;
-    if (cloud.hasLaserAngles()) {
-      indexLaserAngle = &cloud.getLaserAngle(i); 
-    }
     
     // then build and encode the tree
     // *** RING CARTESIAN MODE ***

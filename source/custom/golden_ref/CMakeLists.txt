@@ -30,7 +30,7 @@ set(ORIGINAL_SOURCES
     ${ORIGINAL_SRC_DIR}/attribute_raw_encoder.cpp
     ${ORIGINAL_SRC_DIR}/coordinate_conversion.cpp
     ${ORIGINAL_SRC_DIR}/decoder.cpp
-    ${ORIGINAL_SRC_DIR}/encoder.cpp
+    # ${ORIGINAL_SRC_DIR}/encoder.cpp # RELACED BY CUSTOM
     ${ORIGINAL_SRC_DIR}/entropydirac.cpp
     ${ORIGINAL_SRC_DIR}/frame.cpp
     ${ORIGINAL_SRC_DIR}/geometry_intra_pred.cpp
@@ -54,8 +54,9 @@ set(ORIGINAL_SOURCES
     ${ORIGINAL_SRC_DIR}/tables.cpp
 )
 
-# Custom (02_xyz)
+# Custom (golden_ref)
 set(CUSTOM_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/source/encoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/source/geometry_predictive_encoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/source/ply.cpp
 )
@@ -89,7 +90,7 @@ include_directories(
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/source # Load modified header first if exists
     ${ORIGINAL_SRC_DIR}
-    ${ORIGINAL_SRC_DIR}/..              # Parent dir for "dependencies/..." includes
+    ${ORIGINAL_SRC_DIR}/..             # Parent dir for "dependencies/..." includes
     ${DEPENDENCY_DIR}/nanoflann
     ${DEPENDENCY_DIR}/program-options-lite
     ${DEPENDENCY_DIR}/schroedinger
