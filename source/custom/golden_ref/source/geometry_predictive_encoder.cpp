@@ -193,6 +193,9 @@ public:
   void setMinRadius(int value) { _pgeom_min_radius = value; }
 
 private:
+  // *** RESIDUAL ENCODER ***
+  std::unique_ptr<EntropyEncoder> _residualEncoder;
+  // *** END ***
   EntropyEncoder* _aec;
   std::vector<int32_t> _stack;
   bool _geom_unique_points_flag;
@@ -881,7 +884,6 @@ PredGeomEncoder::encodeTree(
         << (int)p.thetaIdx << "\n";
     }
     #endif
-    
     // *** END POINT DUMP ***
     struct {
       float bits = bits = std::numeric_limits<float>::max();
@@ -1115,7 +1117,7 @@ PredGeomEncoder::encodeTree(
     {
       static std::ofstream dumpFile;
       if (!dumpFile.is_open()) {
-        const char* dumpPath = std::getenv("dump_path");
+        const char* dumpPath = std::getenv("dump_res_path");
         const std::string path = dumpPath ? dumpPath : "/home/swnh/pgc/experiments/csv/best_residual.txt";
         dumpFile.open(path, std::ios::out | std::ios::trunc);
         dumpFile << "# ring plyIdx dx dy dz mode\n";
@@ -1162,15 +1164,22 @@ PredGeomEncoder::encodeTree(
         , best.refNodeIdx
         , best.predIdx
       );
-    
-      int bestNorm = abs(best.residual[0]) + abs(best.residual[1]) + abs(best.residual[2]);
+
+    int bestNorm = abs(best.residual[0]) + abs(best.residual[1]) + abs(best.residual[2]);
+    // *** ENCODE ALL RESIDUALS TO SHARED ENCODER ***
     if (bestNorm != 0) {
+      // Encode to shared residual encoder (all residuals in one stream)
+      EntropyEncoder* origAec = _aec;
+      _aec = _residualEncoder.get();
+
       encodeResidual(
       best.residual, best.mode, best.qphi, best.prediction[0], best.predIdx,
-      best.interFlag
-      , best.refNodeIdx
-    );
-    }    
+      best.interFlag, best.refNodeIdx);
+
+      // Restore original encoder
+      _aec = origAec;
+    }
+    // *** END ***
 
     // convert spherical prediction to cartesian and re-calculate residual
     #if 0
@@ -1274,6 +1283,12 @@ PredGeomEncoder::encode(
   // *** ADDED: indexLaserAngle***
   const int* indexLaserAngle)
 {
+  // *** RESIDUAL ENCODER FOR FULL STREAM ***
+  _residualEncoder.reset(new EntropyEncoder(1024 * 1024, nullptr));
+  _residualEncoder->enableBypassStream(true);
+  _residualEncoder->start();
+  // *** END ***
+
   int32_t processedNodes = 0;
   int32_t rootIdx = reversed ? numNodes-1 : 0;   
   int32_t step = reversed ? -1 : +1;
@@ -1314,6 +1329,24 @@ PredGeomEncoder::encode(
 
   //assert(processedNodes == numNodes);
   std::cerr << "processedNodes: " << processedNodes << ", " << "numNodes: " << numNodes << std::endl;
+
+  // *** DUMP FULL RESIDUAL BITSTREAM ***
+  if (_residualEncoder) {
+    size_t len = _residualEncoder->stop();
+    int numChunks = (len + 255) / 256;
+    
+    static FILE* f = nullptr;
+    if (!f) {
+      const char* envPath = std::getenv("bitstream_path");
+      const char* path = envPath ? envPath : "/home/swnh/pgc/experiments/residual_bitstream.bin";
+      f = fopen(path, "wb");
+    }
+    fwrite(_residualEncoder->buffer(), 1, len, f);
+    fflush(f);
+    
+    std::cerr << "Full residual bitstream: " << len << " bytes, " << numChunks << " chunk(s)" << std::endl;
+  }
+  // ***
 }
 
 //============================================================================
