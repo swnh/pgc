@@ -839,52 +839,9 @@ PredGeomEncoder::encodeTree(
     const int thetaIdx = indexLaserAngle[nodeIdx];
     // *** END ***
 
-    // *** POINT DUMP ***
-    #if 0
-    #pragma pack(push, 1)
-    struct point_in {
-      int16_t x;
-      int16_t y;
-      int16_t z;
-      uint8_t thetaIdx;
-    };
-    #pragma pack(pop)
-    
-    {
-      point_in p;
-      p.x = (int16_t)point[0];
-      p.y = (int16_t)point[1];
-      p.z = (int16_t)point[2];
-      p.thetaIdx = (uint8_t)thetaIdx;
-
-      static std::ofstream binFile;
-
-      if (!binFile.is_open()) {
-        const char* envPath = std::getenv("dump_bin_path");
-        const std::string binPath = envPath ?  envPath : "/home/swnh/pgc/experiments/csv/best_residual.bin";
-        binFile.open(binPath, std::ios::binary | std::ios::out | std::ios::trunc);
-      }
-
-      if (binFile.is_open()) {
-        binFile.write(reinterpret_cast<const char*>(&p), sizeof(p));
-      }
-      
-      static std::ofstream dumpFile;
-      if (!dumpFile.is_open()) {
-        const char* dumpPath = std::getenv("dump_point_path");
-        const std::string path = dumpPath ?  dumpPath : "/home/swnh/pgc/experiments/csv/best_residual.txt";
-        
-        dumpFile.open(path, std::ios::out | std::ios:: trunc);
-        dumpFile << "x,y,z,thetaIdx\n";
-      }
-      dumpFile
-        << (int)p.x << ","
-        << (int)p.y << ","
-        << (int)p.z << ","
-        << (int)p.thetaIdx << "\n";
-    }
-    #endif
-    // *** END POINT DUMP ***
+    // *** INPUT POINT DUMP (REMOVED FROM PROCESSING LOOP) ***
+    // (Moved to PredGeomEncoder::encode for original order)
+    // *** END INPUT POINT DUMP ***
     struct {
       float bits = bits = std::numeric_limits<float>::max();
       GPredicter::Mode mode;
@@ -914,16 +871,12 @@ PredGeomEncoder::encodeTree(
     auto azimuthSpeed = _geomAngularAzimuthSpeed;
     std::bitset<4> unusable;
 
-    const int iModeBegin = _azimuth_scaling_enabled_flag ? 1 : 0;
-    const int iModeEnd = _azimuth_scaling_enabled_flag ? 2 : 2; // None / Delta only (4 -> 2)
-    const int predIdxEnd = _azimuth_scaling_enabled_flag ? NTestedPred : 1;
+    const int iModeBegin = (nodeIdx == rootIdx) ? 0 : 1;
+    const int iModeEnd = (nodeIdx == rootIdx) ? 1 : 2;
+    const int predIdxEnd = 1;
     bool firstCheck = true;
 
     for (int iMode = iModeBegin; iMode < iModeEnd; iMode++) {
-      // *** SET MODE 0 ONLY FOR THE ROOT ***
-      if (iMode == 0 && nodeIdx != rootIdx)
-        continue;
-      // *** END ***
       for (int predIdx = 0; predIdx < predIdxEnd; ++predIdx) {
         GPredicter::Mode mode = GPredicter::Mode(iMode);
         GPredicter predicter =
@@ -935,71 +888,15 @@ PredGeomEncoder::encodeTree(
           continue;
 
         bool refDirFlag = 0;
-        for (auto interFlag = 0; interFlag
-             < (numRef * ((refFrameSph.getGlobalMotionEnabled()) ? 4 : 2)
-                               + 1);
-             //for (auto interFlag = 0; interFlag < (isInterEnabled ? 3 : 1);
-             interFlag++) {
+        for (auto interFlag = 0; interFlag < 1; interFlag++) {
           point_t pred = 0;
           int refNodeIdx = 0;
           //bool refNodeFlag = false;
           if (!interFlag) {
             pred = predicter.predict(
               &srcPts[0], mode, _geom_angular_mode_enabled_flag);
-
-            if (_azimuth_scaling_enabled_flag && predIdx > 0) {
-              pred[0] = preds[predIdx][0];
-              auto deltaPhi = pred[1] - preds[predIdx][1];
-              pred[1] = preds[predIdx][1];
-              if (
-                deltaPhi >= _geomAngularAzimuthSpeed
-                || deltaPhi <= -_geomAngularAzimuthSpeed) {
-                int qphi0 =
-                  divApprox(int64_t(deltaPhi), _geomAngularAzimuthSpeed, 0);
-                pred[1] += qphi0 * _geomAngularAzimuthSpeed;
-              }
-            }
           } else {
-            if (_azimuth_scaling_enabled_flag ? predIdx : iMode)
-              continue;
-            const auto prevPos = srcPts[prevNodeIdx];
-            const auto parentPos = srcPts[nodes[nodeIdx].parent];
-            refNodeIdx = interFlag - 1;
-            if(numRef > 1){
-              if(refFrameSph.getGlobalMotionEnabled()){
-                if(refNodeIdx > 3){
-                  refNodeIdx -= 4;
-                  refDirFlag = 1;
-                }
-              } 
-              else{
-                if(refNodeIdx > 1){
-                  refNodeIdx -= 2;
-                  refDirFlag = 1;
-                }
-              } 
-            }
-            const auto interPred = refDirFlag ? refFrameSph2.getInterPred(prevPos[1], prevPos[2], refNodeIdx) :
-              refFrameSph.getInterPred(prevPos[1], prevPos[2], refNodeIdx);
-            const bool frameMoving = refDirFlag ? frameMovingState2 : frameMovingState;
-
-            if (interPred.first) {
-              pred = interPred.second;
-              if (refNodeIdx > 1 && frameMoving) {
-                const auto deltaPhi = pred[1] - parentPos[1];
-                pred[1] = parentPos[1];
-                if (
-                  deltaPhi >= (_geomAngularAzimuthSpeed >> 1)
-                  || deltaPhi <= -(_geomAngularAzimuthSpeed >> 1)) {
-                  int qphi0 = divApprox(
-                    int64_t(deltaPhi) + (_geomAngularAzimuthSpeed >> 1),
-                    _geomAngularAzimuthSpeed, 0);
-                  pred[1] += qphi0 * _geomAngularAzimuthSpeed;
-                }
-              }
-            } 
-            else
-              continue;
+            continue;
           }
           auto residual = point - pred;
 
@@ -1113,30 +1010,31 @@ PredGeomEncoder::encodeTree(
       }
     }
 
-    // *** RESIDUAL DUMP ***
+    // *** INTERMEDIATE DUMP (RESIDUALS & PREDICTIONS) ***
     {
-      static std::ofstream dumpFile;
-      if (!dumpFile.is_open()) {
-        const char* dumpPath = std::getenv("dump_res_path");
-        const std::string path = dumpPath ? dumpPath : "/home/swnh/pgc/experiments/csv/best_residual.txt";
-        dumpFile.open(path, std::ios::out | std::ios::trunc);
-        dumpFile << "# ring plyIdx dx dy dz mode\n";
+      static std::ofstream resDump;
+      if (!resDump.is_open()) {
+        const char* envPath = std::getenv("dump_res_path");
+        const std::string path = envPath ? envPath : "/home/swnh/pgc/experiments/csv/residuals.csv";
+        resDump.open(path, std::ios::out | std::ios::trunc);
+        resDump << "nodeIdx,dx,dy,dz,mode,thetaIdx\n";
       }
-      dumpFile
-        << thetaIdx << ' '
-        << nodeIdx << ' '
-        << best.residual[0] << ' '
-        << best.residual[1] << ' '
-        << best.residual[2] << ' '
-        << int(best.mode)   << '\n';
+      resDump << nodeIdx << "," << best.residual[0] << "," << best.residual[1] << "," << best.residual[2] << ","
+              << int(best.mode) << "," << thetaIdx << "\n";
+
+      static std::ofstream predDump;
+      if (!predDump.is_open()) {
+        const char* envPath = std::getenv("dump_pred_path");
+        const std::string path = envPath ? envPath : "/home/swnh/pgc/experiments/csv/predictions.csv";
+        predDump.open(path, std::ios::out | std::ios::trunc);
+        predDump << "nodeIdx,px,py,pz,thetaIdx\n";
+      }
+      predDump << nodeIdx << "," << best.prediction[0] << "," << best.prediction[1] << "," << best.prediction[2] << "," << thetaIdx << "\n";
     }
-    // *** END RESIDUAL DUMP ***
+    // *** END INTERMEDIATE DUMP ***
     
     // *** MODE 0 CHECK ***
-    if ((nodeIdx > 31) && best.mode == 0) {
-      std::cerr << "Mode 0 is not allowed for non-root nodes " << nodeIdx << std::endl;
-      modeFlag = true;
-    }
+    // (Removed buggy check: root nodes can have any index in sorted cloud)
     // *** END MODE 0 CHECK ***
 
     assert(node.childrenCount <= GNode::MaxChildrenCount);
@@ -1165,9 +1063,8 @@ PredGeomEncoder::encodeTree(
         , best.predIdx
       );
 
-    int bestNorm = abs(best.residual[0]) + abs(best.residual[1]) + abs(best.residual[2]);
     // *** ENCODE ALL RESIDUALS TO SHARED ENCODER ***
-    if (bestNorm != 0) {
+    {
       // Encode to shared residual encoder (all residuals in one stream)
       EntropyEncoder* origAec = _aec;
       _aec = _residualEncoder.get();
@@ -1236,6 +1133,24 @@ PredGeomEncoder::encodeTree(
     #endif 
     // *** END ***
     reconPts[nodeIdx] = best.prediction + best.residual;
+
+    // duplicated points must be updated with unquantized value
+    // for attributes coding
+    for (int i = 1; i <= node.numDups; i++)
+      reconPts[nodeIdx + i] = reconPts[nodeIdx];
+
+    // *** RECON POINT DUMP ***
+    {
+      static std::ofstream reconDump;
+      if (!reconDump.is_open()) {
+        const char* envPath = std::getenv("dump_recon_path");
+        const std::string path = envPath ? envPath : "/home/swnh/pgc/experiments/csv/recon_points.csv";
+        reconDump.open(path, std::ios::out | std::ios::trunc);
+        reconDump << "nodeIdx,rx,ry,rz,thetaIdx\n";
+      }
+      reconDump << nodeIdx << "," << reconPts[nodeIdx][0] << "," << reconPts[nodeIdx][1] << "," << reconPts[nodeIdx][2] << "," << thetaIdx << "\n";
+    }
+    // *** END RECON POINT DUMP ***
 
     // *** ACCEPT THE NEGATIVE COORDINATES ***
     #if 0
@@ -1745,6 +1660,37 @@ encodePredictiveGeometry(
 
   // set the minimum value to zero, if encoder don't use this info.
   gbh.pgeom_min_radius = 0;
+
+  // *** INPUT POINT DUMP (ORIGINAL PLY ORDER) ***
+  {
+    static std::ofstream binFile;
+    static std::ofstream txtFile;
+    const char* binPathEnv = std::getenv("dump_bin_path");
+    const char* txtPathEnv = std::getenv("dump_point_path");
+    
+    if (binPathEnv && !binFile.is_open()) {
+        binFile.open(binPathEnv, std::ios::binary | std::ios::out | std::ios::trunc);
+    }
+    if (txtPathEnv && !txtFile.is_open()) {
+        txtFile.open(txtPathEnv, std::ios::out | std::ios::trunc);
+        txtFile << "nodeIdx,x,y,z,thetaIdx\n";
+    }
+
+    for (int i = 0; i < numPoints; ++i) {
+        const int thetaIdx = cloud.hasLaserAngles() ? cloud.getLaserAngle(i) : 0;
+        if (binFile.is_open()) {
+            #pragma pack(push, 1)
+            struct { int16_t x, y, z; uint8_t t; } p = { (int16_t)cloud[i][0], (int16_t)cloud[i][1], (int16_t)cloud[i][2], (uint8_t)thetaIdx };
+            #pragma pack(pop)
+            binFile.write(reinterpret_cast<const char*>(&p), sizeof(p));
+        }
+        if (txtFile.is_open()) {
+            txtFile << i << "," << cloud[i][0] << "," << cloud[i][1] << "," << cloud[i][2] << "," << thetaIdx << "\n";
+        }
+    }
+  }
+  // *** END INPUT POINT DUMP ***
+
   int32_t splitter = opt.splitter;
   bool reversed = false;
 
@@ -1771,7 +1717,8 @@ encodePredictiveGeometry(
       indexLaserAngle = &cloud.getLaserAngle(i); 
     }
 
-    // *** DUMP POINT CLOUD IN PLY ORDER ***
+    // *** DUMP POINT CLOUD IN PLY ORDER (REMOVED: MOVED TO PredGeomEncoder::encode) ***
+    #if 0
     #pragma pack(push, 1)
     struct point_in {
       int16_t x;
@@ -1815,6 +1762,8 @@ encodePredictiveGeometry(
           << (int)p.thetaIdx << "\n";
       }
     }
+    #endif
+    // *** END DUMP ***
 
     // first, put the points in this tree into a sorted order
     // this can significantly improve the constructed tree
