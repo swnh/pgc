@@ -20,7 +20,7 @@ void binarizer::process_binarize() {
     // ----------------------------------------------------
     fifo_in_rdy.write(false);
     bin_fifo_vld.write(false);
-    bypass_fifo_vld.write(false);
+    bypass_vld.write(false);
     bin_data_out.write(0);
     bypass_data_out.write(0);
     point_idx = 0;
@@ -95,11 +95,14 @@ void binarizer::process_binarize() {
         bin_out.range(4, 1)   = numBits[0];
         bin_out.range(0, 0)   = sign[0];
 
-        // Pack Bypass Buffer data (45 bits)
-        sc_uint<45> bypass_out = 0;
+        // Pack Bypass Buffer data (57 bits): [44:30] X val, [29:15] Y val, [14:0] Z val, [56:53] X numBits, [52:49] Y numBits, [48:45] Z numBits
+        sc_uint<57> bypass_out = 0;
         bypass_out.range(44, 30) = value[2];
         bypass_out.range(29, 15) = value[1];
         bypass_out.range(14, 0)  = value[0];
+        bypass_out.range(56, 53) = numBits[2];
+        bypass_out.range(52, 49) = numBits[1];
+        bypass_out.range(48, 45) = numBits[0];
 
         bin_data_out.write(bin_out);
         bypass_data_out.write(bypass_out);
@@ -110,20 +113,20 @@ void binarizer::process_binarize() {
         // Multi-sink handshake logic: Ensure each sink consumes data exactly once
         while (!(bin_accepted && bypass_accepted)) {
             bin_fifo_vld.write(!bin_accepted);
-            bypass_fifo_vld.write(!bypass_accepted);
+            bypass_vld.write(!bypass_accepted);
             
             wait();
 
             if (!bin_accepted && bin_fifo_vld.read() && bin_fifo_rdy.read()) {
                 bin_accepted = true;
             }
-            if (!bypass_accepted && bypass_fifo_vld.read() && bypass_fifo_rdy.read()) {
+            if (!bypass_accepted && bypass_vld.read() && bypass_rdy.read()) {
                 bypass_accepted = true;
             }
         }
 
         bin_fifo_vld.write(false);
-        bypass_fifo_vld.write(false);
+        bypass_vld.write(false);
 
         // Increment point index for the next point in the ring
         point_idx = (point_idx == 383) ? 0 : point_idx + 1;

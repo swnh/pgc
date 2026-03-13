@@ -10,9 +10,6 @@ void tb::report_final() {
 }
 
 void tb::source() {
-    // ----------------------------------------------------
-    // System Reset Phase
-    // ----------------------------------------------------
     rst.write(true);
     fifo_in_vld.write(false);
     data_in.write(0);
@@ -21,18 +18,14 @@ void tb::source() {
     rst.write(false);
     wait(10);
 
-    // ----------------------------------------------------
-    // 1. Load Expected Results (Golden Data)
-    // ----------------------------------------------------
     std::ifstream fg(res_file);
     if (!fg.is_open()) {
         std::cerr << "Error opening golden output file: " << res_file << std::endl;
-        report_final();
         sc_stop();
         return;
     }
     std::string line;
-    std::getline(fg, line); // skip header: nodeIdx,dx,dy,dz,mode,thetaIdx
+    std::getline(fg, line);
     while (std::getline(fg, line)) {
         if (line.empty() || line[0] == '\r') continue;
         std::stringstream ss(line);
@@ -53,17 +46,13 @@ void tb::source() {
 
     std::cout << "Loaded " << total_golden << " golden results." << std::endl;
 
-    // ----------------------------------------------------
-    // 2. Load Inputs and Drive Stimulus
-    // ----------------------------------------------------
     std::ifstream fi(in_file);
     if (!fi.is_open()) {
         std::cerr << "Error opening input file: " << in_file << std::endl;
-        report_final();
         sc_stop();
         return;
     }
-    std::getline(fi, line); // skip header: nodeIdx,x,y,z,thetaIdx
+    std::getline(fi, line);
     
     while (std::getline(fi, line)) {
         if (line.empty() || line[0] == '\r') continue;
@@ -100,13 +89,9 @@ void tb::source() {
     }
     fi.close();
 
-    // ----------------------------------------------------
-    // 3. Pad Final Packet
-    // ----------------------------------------------------
     int padding = 384 - (total_golden % 384);
     if (padding != 384) {
         data_in.write(0);
-        fifo_in_vld.write(true);
         for (int i = 0; i < padding; i++) {
             int wait_cnt = 0;
             do {
@@ -127,34 +112,25 @@ void tb::source() {
 }
 
 void tb::sink() {
-    byte_out_rdy.write(false);
-    bypass_fifo_rdy.write(false);
+    chunk_out_rdy.write(false);
+    flush_out.write(false);
     
     wait(20);
     
     int idle_cycles = 0;
-    const int MAX_IDLE = 1000000; // 1M cycles
+    const int MAX_IDLE = 1000000;
 
     while (true) {
-        byte_out_rdy.write(true);
-        bypass_fifo_rdy.write(true);
+        chunk_out_rdy.write(true);
         wait();
         
         bool active = false;
 
-        if (byte_out_vld.read() && byte_out_rdy.read()) {
+        // Verify residuals via monitor port
+        if (mon_bypass_vld.read() && mon_bypass_rdy.read()) {
             active = true;
-            sc_uint<8> byte = byte_out.read();
-            char c = (char)byte.to_uint();
-            if (f_bin.is_open()) {
-                f_bin.write(&c, 1);
-            }
-        }
-
-        if (bypass_fifo_vld.read() && bypass_fifo_rdy.read()) {
-            active = true;
-            sc_uint<45> bypass_data = bypass_data_out.read();
-
+            sc_uint<57> bp_data = mon_bypass_data.read();
+            
             if (!nodeIdx_queue.empty()) {
                 int n_idx = nodeIdx_queue.front();
                 nodeIdx_queue.pop();
@@ -162,36 +138,34 @@ void tb::sink() {
                 if (golden_map.find(n_idx) != golden_map.end()) {
                     GoldenOut gout = golden_map[n_idx];
                     
-                    // Calculate expected binarization
+                    sc_uint<15> exp_val[3];
                     int res[3] = {gout.dx, gout.dy, gout.dz};
-                    sc_uint<15> exp_value[3];
-
-                    for (int i = 0; i < 3; i++) {
+                    for(int i=0; i<3; i++) {
                         int abs_res = (res[i] < 0) ? -res[i] : res[i];
-                        if (abs_res == 0) {
-                            exp_value[i] = 0;
-                        } else {
-                            exp_value[i] = abs_res - 1;
-                        }
+                        exp_val[i] = (abs_res == 0) ? 0 : (abs_res - 1);
                     }
 
-                    // Verify Bypass Buffer
-                    bool bypass_match = true;
-                    if (bypass_data.range(44, 30) != exp_value[2]) bypass_match = false;
-                    if (bypass_data.range(29, 15) != exp_value[1]) bypass_match = false;
-                    if (bypass_data.range(14, 0) != exp_value[0]) bypass_match = false;
-
-                    if (!bypass_match) {
-                        std::cout << "Mismatch at nodeIdx=" << n_idx << std::endl;
+                    if (bp_data.range(14, 0) != exp_val[0] || // X
+                        bp_data.range(29, 15) != exp_val[1] || // Y
+                        bp_data.range(44, 30) != exp_val[2])   // Z
+                    {
+                        std::cout << "Residual Mismatch at nodeIdx=" << n_idx 
+                                  << " exp: " << exp_val[0] << "," << exp_val[1] << "," << exp_val[2]
+                                  << " got: " << bp_data.range(14, 0) << "," << bp_data.range(29, 15) << "," << bp_data.range(44, 30) << std::endl;
                         errors++;
                     }
-
                     total_processed++;
-                } else {
-                    std::cerr << "NodeIdx " << n_idx << " not found in golden data!" << std::endl;
                 }
-            } else {
-                std::cerr << "Received bypass data but nodeIdx_queue is empty!" << std::endl;
+            }
+        }
+
+        // Handle chunk output
+        if (chunk_out_vld.read() && chunk_out_rdy.read()) {
+            active = true;
+            sc_uint<8> byte = chunk_out_byte.read();
+            char c = (char)byte.to_uint();
+            if (f_bin.is_open()) {
+                f_bin.write(&c, 1);
             }
         }
 
@@ -201,31 +175,18 @@ void tb::sink() {
             idle_cycles++;
         }
 
-        // End simulation if complete
-        if (total_golden > 0 && total_processed >= total_golden) {
-            // Wait a few more cycles to ensure all byte_out are captured
-            for(int i=0; i<100; i++) {
-        if (byte_out_vld.read() && byte_out_rdy.read()) {
-            sc_uint<8> byte = byte_out.read();
-                    char c = (char)byte.to_uint();
-                    if (f_bin.is_open()) f_bin.write(&c, 1);
-                }
-                wait();
-            }
-            std::cout << "Simulation finished. Total processed: " << total_processed << ". Errors: " << errors << std::endl;
+        if (source_done && nodeIdx_queue.empty() && idle_cycles > 10000) {
+            flush_out.write(true);
+            wait();
+            flush_out.write(false);
+            report_final();
             sc_stop();
             return;
         }
-
-        if (source_done && nodeIdx_queue.empty() && idle_cycles > 1000) {
-            std::cout << "Simulation finished (source done and idle). Total processed: " << total_processed << ". Errors: " << errors << std::endl;
-            sc_stop();
-            return;
-        }
-
-        if (idle_cycles >= MAX_IDLE) {
-            std::cout << "Simulation timeout: No activity for " << MAX_IDLE << " cycles." << std::endl;
-            std::cout << "Processed: " << total_processed << " / " << total_golden << std::endl;
+        
+        if (idle_cycles > MAX_IDLE) {
+            std::cerr << "Sink timeout!" << std::endl;
+            report_final();
             sc_stop();
             return;
         }

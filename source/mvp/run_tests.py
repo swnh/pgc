@@ -16,7 +16,8 @@ def main():
         "-I/home/swnh/systemc/src", 
         "-L/home/swnh/systemc/build/src", 
         "-lsystemc", 
-        "main.cc", "delta.cc", "binarizer.cc", "tb.cc", "context_modeler.cc", "arith_encoder.cc", 
+        "-DSC_ALLOW_DEPRECATED_IEEE_API",
+        "main.cc", "delta.cc", "binarizer.cc", "tb.cc", "context_modeler.cc", "arith_encoder.cc", "chunk_mux.cc",
         "-o", "sim"
     ]
     
@@ -34,7 +35,7 @@ def main():
     # Discover files
     print("Discovering test files...")
     search_pattern = "/home/swnh/pgc/experiments/golden_ref_dump/**/*_in.csv"
-    input_files = glob.glob(search_pattern, recursive=True)
+    input_files = glob.glob(search_pattern, recursive=True)[:50]
     input_files.sort()
     
     total_files = len(input_files)

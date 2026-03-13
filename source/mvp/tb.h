@@ -15,7 +15,6 @@
 #include <map>
 
 #include "delta.h"
-#include "binarizer.h"
 
 struct GoldenOut {
     int dx;
@@ -35,15 +34,18 @@ SC_MODULE(tb) {
     sc_out<bool>        fifo_in_vld;
     sc_out<data53_t>    data_in;
 
-    // Arithmetic Encoder -> TB
-    sc_in<bool>         byte_out_vld;
-    sc_out<bool>        byte_out_rdy;
-    sc_in<sc_uint<8>>   byte_out;
+    // ChunkMux -> TB
+    sc_in<bool>         chunk_out_vld;
+    sc_out<bool>        chunk_out_rdy;
+    sc_in<sc_uint<8>>   chunk_out_byte;
 
-    // Binarizer -> TB (Bypass Buffer)
-    sc_in<bool>         bypass_fifo_vld;
-    sc_out<bool>        bypass_fifo_rdy;
-    sc_in<sc_uint<45>>  bypass_data_out;
+    // Monitor ports for verification
+    sc_in<bool>         mon_bypass_vld;
+    sc_in<bool>         mon_bypass_rdy;
+    sc_in<sc_uint<57>>  mon_bypass_data;
+
+    // Flush output to chunk mux
+    sc_out<bool>        flush_out;
 
     // ---------------- Processes ----------------
     void source();

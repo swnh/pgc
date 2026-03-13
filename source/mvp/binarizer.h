@@ -36,10 +36,10 @@ SC_MODULE(binarizer) {
     sc_in<bool>         bin_fifo_rdy;
     sc_out<sc_uint<32>> bin_data_out;
 
-    // Output to Arithmetic Encoder (Bypass Buffer)
-    sc_out<bool>        bypass_fifo_vld;
-    sc_in<bool>         bypass_fifo_rdy;
-    sc_out<sc_uint<45>> bypass_data_out;
+    // Output to Chunk Multiplexer (Bypass Data with numBits metadata)
+    sc_out<bool>        bypass_vld;
+    sc_in<bool>         bypass_rdy;
+    sc_out<sc_uint<57>> bypass_data_out;
 
     // ---------------- Internal State ----------------
     sc_uint<9> point_idx; ///< Tracks point position in the 384-point ring
