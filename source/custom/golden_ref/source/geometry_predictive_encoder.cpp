@@ -131,7 +131,7 @@ public:
   void encodeResidual(const Vec3<int32_t> residual);
   // *** END ***
   void encodeResidual(const Vec3<int32_t>& residual, int iMode, int multiplier, int rPred, int predIdx, const bool interFlag
-    , int refNodeIdx
+    , int refNodeIdx, int nodeIdx, int thetaIdx
   );
   void encodeResPhi(
     int32_t resPhi, int predIdx, int boundPhi, const bool interFlag
@@ -493,11 +493,23 @@ PredGeomEncoder::estimateResR(int32_t resR, int multiplier, int predIdx, const b
 //----------------------------------------------------------------------------
 void
 PredGeomEncoder::encodeResidual(const Vec3<int32_t>& residual, int iMode, int multiplier, int rPred, int predIdx, const bool interFlag
-  , int refNodeIdx
+  , int refNodeIdx, int nodeIdx, int thetaIdx
 )
 {
   int interCtxIdx = interFlag ? 1 : 0;
   int k = 0;
+
+  // ── bin dump file (opened once) ───────────────────────────────
+  static std::ofstream binDump;
+  if (!binDump.is_open()) {
+    const char* envPath = std::getenv("dump_bins_path");
+    const std::string path = envPath
+      ? envPath
+      : "/home/swnh/pgc/experiments/csv/bins.csv";
+    binDump.open(path, std::ios::out | std::ios::trunc);
+    binDump << "nodeIdx,thetaIdx,k,"
+               "isNonZero,numBits,value,sign\n";
+  }
 
   if (_azimuth_scaling_enabled_flag) {
     // N.B. mode is always 1 with _azimuth_scaling_enabled_flag
@@ -520,12 +532,29 @@ PredGeomEncoder::encodeResidual(const Vec3<int32_t>& residual, int iMode, int mu
       continue;
 
     const auto res = residual[k];
+    
+    int b_isNonZero = (res != 0) ? 1 : 0;
+    int b_numBits   = 0;
+    int b_value     = 0;
+    int b_sign      = (res < 0) ? 1 : 0;
+    
     _aec->encode(res != 0, _ctxResGt0[interCtxIdx][k]);
-    if (!res)
+    if (!res){
+      // ── dump zero residual row before skipping ─────────────
+      binDump << nodeIdx     << ","
+              << thetaIdx    << ","
+              << k           << ","
+              << b_isNonZero << ","
+              << b_numBits   << ","
+              << b_value     << ","
+              << b_sign      << "\n";
       continue;
+    }
 
     int32_t value = abs(res) - 1;
     int32_t numBits = 1 + ilog2(uint32_t(value));
+    b_value   = value;
+    b_numBits = numBits;
 
     AdaptiveBitModel* ctxs = &_ctxNumBits[interCtxIdx][ctxIdx][k][0] - 1;
     for (int ctxIdx = 1, n = _pgeom_resid_abs_log2_bits[k] - 1; n >= 0; n--) {
@@ -544,6 +573,15 @@ PredGeomEncoder::encodeResidual(const Vec3<int32_t>& residual, int iMode, int mu
     if (iMode || k) {
       _aec->encode(res < 0, _ctxSign[interCtxIdx][k]);
     }
+
+    // ── dump one row per axis ──────────────────────────────────
+    binDump << nodeIdx    << ","
+            << thetaIdx   << ","
+            << k          << ","
+            << b_isNonZero << ","
+            << b_numBits  << ","
+            << b_value    << ","
+            << b_sign     << "\n";
   }
 }
 
@@ -1071,7 +1109,7 @@ PredGeomEncoder::encodeTree(
 
       encodeResidual(
       best.residual, best.mode, best.qphi, best.prediction[0], best.predIdx,
-      best.interFlag, best.refNodeIdx);
+      best.interFlag, best.refNodeIdx, nodeIdx, thetaIdx);
 
       // Restore original encoder
       _aec = origAec;
